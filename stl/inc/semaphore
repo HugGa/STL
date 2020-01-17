@@ -16,7 +16,9 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <exception>
 
 #pragma pack(push, _CRT_PACKING)
 #pragma warning(push, _STL_WARNING_LEVEL)
@@ -29,8 +31,9 @@ _STD_BEGIN
 template <ptrdiff_t _LeastMaxValue = 256>
 class counting_semaphore {
 public:
-    static constexpr ptrdiff_t max() noexcept {
-        // _LeastMaxValue is used here so that things such as binary_semaphore are
+    static constexpr ptrdiff_t(max)() noexcept {
+        // _LeastMaxValue is used here so that things such as binary_semaphore are limited to the max value, should
+        // probably be changed
         return _LeastMaxValue;
     }
     constexpr explicit counting_semaphore(ptrdiff_t _Desired) {
@@ -43,36 +46,53 @@ public:
     counting_semaphore& operator=(const counting_semaphore&) = delete;
 
     void release(ptrdiff_t _Update = 1) {
-        _Counter.fetch_add(_Update, memory_order::release);
+        std::atomic_ref<ptrdiff_t> _AtomicRef(_Counter);
+        _AtomicRef.fetch_add(_Update, memory_order::release);
+        WakeByAddressAll(&_Counter);
     }
     void acquire() {
+        ptrdiff_t _Undesired = 0;
         while (!try_acquire()) {
+            if (!WaitOnAddress(&_Counter, &_Undesired, sizeof(_Counter), INFINITE)) {
+                // Probably should move this into a .cpp file and wrap around that so that we don't pull in windows.h
+                // spuriously
+                throw system_error(GetLastError(), system_category());
+            }
         }
     }
     bool try_acquire() noexcept {
-        ptrdiff_t _Old     = _Counter.load(memory_order::acquire);
+        std::atomic_ref<ptrdiff_t> _AtomicRef(_Counter);
+        ptrdiff_t _Old     = _AtomicRef.load(memory_order::acquire);
         ptrdiff_t _Desired = _Old - 1;
-        if (_Old > 0 && _Counter.compare_exchange_strong(_Old, _Desired)) {
+        if (_Old > 0 && _AtomicRef.compare_exchange_strong(_Old, _Desired)) {
             return true;
         }
         return false;
     }
     template <class _Rep, class _Period>
     bool try_acquire_for(const chrono::duration<_Rep, _Period>& _Rel_time) {
-        return try_acquire_until(chrono::steady_clock::now() + _Rel_time);
-    }
-    template <class _Clock, class _Duration>
-    bool try_acquire_until(const chrono::time_point<_Clock, _Duration>& _Abs_time) {
+        ptrdiff_t _Undesired = 0;
         while (!try_acquire()) {
-            if (_Clock::now() >= _Abs_time) {
-                return false;
+            if (!WaitOnAddress(&_Counter, &_Undesired, sizeof(_Counter), chrono::duration_cast<milli>(_Rel_time))) {
+                // Probably should move this into a .cpp file and wrap around that so that we don't pull in windows.h
+                // spuriously However the check for ERROR_TIMEOUT needs to be done separately to keep in line with the
+                // standard,
+                DWORD _LastErr = GetLastError();
+                if (_LastErr == ERROR_TIMEOUT) {
+                    return false;
+                }
+                throw system_error(_LastErr, system_category());
             }
         }
         return true;
     }
+    template <class _Clock, class _Duration>
+    bool try_acquire_until(const chrono::time_point<_Clock, _Duration>& _Abs_time) {
+        return try_acquire_for(_Clock::now() - _Abs_time);
+    }
 
 private:
-    atomic<ptrdiff_t> _Counter;
+    ptrdiff_t _Counter;
 };
 using binary_semaphore = counting_semaphore<1>;
 _STD_END
