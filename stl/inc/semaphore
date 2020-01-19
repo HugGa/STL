@@ -14,9 +14,7 @@
 #pragma message("The contents of <semaphore> are available only with C++20 or later.")
 #else // ^^^ !_HAS_CXX20 / _HAS_CXX20 vvv
 #include <atomic>
-#include <cassert>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <exception>
 
@@ -32,13 +30,13 @@ template <ptrdiff_t _LeastMaxValue = 256>
 class counting_semaphore {
 public:
     static constexpr ptrdiff_t(max)() noexcept {
-        // _LeastMaxValue is used here so that things such as binary_semaphore are limited to the max value, should
-        // probably be changed
+        // _LeastMaxValue is used here so that things such as binary_semaphore are limited to the max value of its
+        // specialization
         return _LeastMaxValue;
     }
     constexpr explicit counting_semaphore(ptrdiff_t _Desired) {
-        _STL_ASSERT(
-            _Desired >= 0 && _Desired <= max(), "Desired value for the semaphore falls outside of semaphore range");
+        _STL_ASSERT(_Desired >= 0 && _Desired <= max(),
+            "Desired value for the semaphore falls outside of the maximum semaphore range");
         atomic_init(&_Counter, _Desired);
     }
     ~counting_semaphore()                         = default;
@@ -46,25 +44,30 @@ public:
     counting_semaphore& operator=(const counting_semaphore&) = delete;
 
     void release(ptrdiff_t _Update = 1) {
-        std::atomic_ref<ptrdiff_t> _AtomicRef(_Counter);
-        _AtomicRef.fetch_add(_Update, memory_order::release);
-        WakeByAddressAll(&_Counter);
+        // Note: This assert does not check if _Update is less than or equal to max() - _Counter as required by the
+        // standard since by the time that check happens the value could have changed and we wouldn't know about it
+        // (According to Billy O'Neal). Granted, if you accidentally have more releases() than acquires that's your own
+        // fault, but we can't actually punish you for it because of this.
+        _STL_ASSERT(_Update >= 0, "You cannot release a negative value for semaphores");
+        _Counter.fetch_add(_Update);
+        WakeByAddressSingle(&_Counter._Storage._Value);
     }
     void acquire() {
         ptrdiff_t _Undesired = 0;
         while (!try_acquire()) {
-            if (!WaitOnAddress(&_Counter, &_Undesired, sizeof(_Counter), INFINITE)) {
-                // Probably should move this into a .cpp file and wrap around that so that we don't pull in windows.h
-                // spuriously
+            if (!WaitOnAddress(&_Counter._Storage._Value, &_Undesired, sizeof(_Counter._Storage._Value), INFINITE)) {
+                // This, just like in try_acquire_for, needs to be moved to a .cpp file, except we can call a noreturn
+                // function here to optimize it better
                 throw system_error(GetLastError(), system_category());
             }
         }
     }
     bool try_acquire() noexcept {
-        std::atomic_ref<ptrdiff_t> _AtomicRef(_Counter);
-        ptrdiff_t _Old     = _AtomicRef.load(memory_order::acquire);
+        // This doesn't require a loop since if this fails even once we're allowed to yeet ourselves out of the function
+        // by the standard
+        ptrdiff_t _Old     = _Counter.load();
         ptrdiff_t _Desired = _Old - 1;
-        if (_Old > 0 && _AtomicRef.compare_exchange_strong(_Old, _Desired)) {
+        if (_Old > 0 && _Counter.compare_exchange_strong(_Old, _Desired)) {
             return true;
         }
         return false;
@@ -73,10 +76,12 @@ public:
     bool try_acquire_for(const chrono::duration<_Rep, _Period>& _Rel_time) {
         ptrdiff_t _Undesired = 0;
         while (!try_acquire()) {
-            if (!WaitOnAddress(&_Counter, &_Undesired, sizeof(_Counter), chrono::duration_cast<milli>(_Rel_time))) {
-                // Probably should move this into a .cpp file and wrap around that so that we don't pull in windows.h
-                // spuriously However the check for ERROR_TIMEOUT needs to be done separately to keep in line with the
-                // standard,
+            if (!WaitOnAddress(&_Counter._Storage._Value, &_Undesired, sizeof(_Counter._Storage._Value),
+                    chrono::duration_cast<milli>(_Rel_time))) {
+                // This is just a demonstration of what is needed in terms of functionality, the entire GetLastError and
+                // system_error stuff needs to be moved into a separately compiled .cpp file to avoid pulling in the
+                // synchronization library and windows.h for no reason, as well as to provide support for everything
+                // between XP and Windows 10.
                 DWORD _LastErr = GetLastError();
                 if (_LastErr == ERROR_TIMEOUT) {
                     return false;
@@ -92,7 +97,7 @@ public:
     }
 
 private:
-    ptrdiff_t _Counter;
+    atomic<ptrdiff_t> _Counter;
 };
 using binary_semaphore = counting_semaphore<1>;
 _STD_END
