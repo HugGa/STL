@@ -65,17 +65,15 @@ public:
         while (!try_acquire()) {
             ptrdiff_t _Undesired = 0;
             if constexpr (sizeof(ptrdiff_t) == sizeof(unsigned long long)) {
-                switch (__std_semaphore_wait_on_ullong_timed(&_Counter._Storage._Value, &_Undesired, _Infinite_Wait)) {
+                switch (__std_semaphore_wait_on_ullong_timed(&_Counter._Storage._Value, _Undesired, _Infinite_Wait)) {
                 case 0:
                     break;
                 default:
                     // implement exceptions here, we can add cases for other stuff as well
                     break;
                 }
-                // This, just like in try_acquire_for, needs to be moved to a .cpp file, except we can call a
-                // noreturn function here to optimize it better
             } else if (sizeof(ptrdiff_t) == sizeof(unsigned long)) {
-                switch (__std_semaphore_wait_on_ulong_timed(&_Counter._Storage._Value, &_Undesired, _Infinite_Wait)) {
+                switch (__std_semaphore_wait_on_ulong_timed(&_Counter._Storage._Value, _Undesired, _Infinite_Wait)) {
                 case 0:
                     break;
                 default:
@@ -102,8 +100,8 @@ public:
             ptrdiff_t _Undesired = 0;
             if constexpr (sizeof(ptrdiff_t) == sizeof(long long)) {
                 switch (__std_semaphore_wait_on_ullong_timed(
-                    &_Counter._Storage._Value, &_Undesired, chrono::duration_cast<milli>(_Rel_time))) {
-                case 0:
+                    &_Counter._Storage._Value, _Undesired, chrono::duration_cast<milli>(_Rel_time))) {
+                case 0: // successful wait which means go back to acquiring
                     break;
                 case 1:
                     return false;
@@ -113,7 +111,7 @@ public:
                 }
             } else if (sizeof(ptrdiff_t) == sizeof(long)) {
                 switch (__std_semaphore_wait_on_ulong_timed(
-                    &_Counter._Storage._Value, &_Undesired, chrono::duration_cast<milli>(_Rel_time))) {
+                    &_Counter._Storage._Value, _Undesired, chrono::duration_cast<milli>(_Rel_time))) {
                 case 0:
                     break;
                 case 1:
@@ -133,7 +131,7 @@ public:
 
 private:
     atomic<ptrdiff_t> _Counter;
-    constexpr unsigned long _Infinite_Wait = 0xFFFFFFFF;
+    constexpr static unsigned long _Infinite_Wait = 0xFFFFFFFF;
 };
 using binary_semaphore = counting_semaphore<1>;
 _STD_END

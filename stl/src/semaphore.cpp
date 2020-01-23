@@ -4,7 +4,8 @@
 
 // This file is almost an exact copy of parallel_algorithms minus any threadpools and with some loads for unsigned long
 // and usigned long long values as well as adding a timed wait for both of those.
-
+// The below comment is here from parallel_algorithms, in case it's the same here as there I am making sure that nothing
+// that can't be allowed there is in here as well by keeping the same header set
 
 // This must be as small as possible, because its contents are
 // injected into the msvcprt.lib and msvcprtd.lib import libraries.
@@ -148,6 +149,7 @@ void __stdcall __std_semaphore_init_values() {
     unsigned int _Result = _Atomic_load_uint(&_Parallel_info._Initialized);
     if (_Result == 0) {
         // Something else should be done here to notify that semaphore isn't availible on this platform
+        // But I don't know what
         if (_Initialize_semaphore_init_info()) {
             _Result = 1;
         } else {
@@ -191,8 +193,8 @@ char __stdcall __std_execution_wait_on_ullong_timed(
 
     // fake WaitOnAddress via SRWLOCK and CONDITION_VARIABLE
     for (int _Idx = 0; _Idx < 4096; ++_Idx) { // optimistic non-backoff spin
-        if (_Atomic_load_ullong(_Address)
-            != _Compare) { // only return if it's no longer the same here (mimicking WaitOnAddress)
+        // only return if it's no longer the same here (mimicking WaitOnAddress)
+        if (_Atomic_load_ullong(_Address) != _Compare) {
             return 0;
         }
     }
@@ -261,7 +263,8 @@ char __stdcall __std_execution_wait_on_ulong_timed(
 
     // fake WaitOnAddress via SRWLOCK and CONDITION_VARIABLE
     for (int _Idx = 0; _Idx < 4096; ++_Idx) { // optimistic non-backoff spin
-        if (_Atomic_load_ulong(_Address) != _Compare) { // only return if it's no longer the same here
+        // only return if it's no longer the same here (mimicking WaitOnAddress)
+        if (_Atomic_load_ulong(_Address) != _Compare) {
             return 0;
         }
     }
