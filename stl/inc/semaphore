@@ -25,6 +25,15 @@ _STL_DISABLE_CLANG_WARNINGS
 #pragma push_macro("new")
 #undef new
 
+_EXTERN_C
+void __stdcall __std_semaphore_init_values() noexcept;
+char __stdcall __std_semaphore_wait_on_ullong_timed(_In_ const volatile unsigned long long* _Address,
+    _In_ unsigned long long _Compare, _In_ unsigned long _Time) noexcept;
+char __stdcall __std_semaphore_wait_on_ulong_timed(
+    _In_ const volatile unsigned long* _Address, _In_ unsigned long _Compare, _In_ unsigned long _Time) noexcept;
+void __stdcall __std_semaphore_wake_by_address(_In_ const volatile void* _Address) noexcept;
+_END_EXTERN_C
+
 _STD_BEGIN
 template <ptrdiff_t _LeastMaxValue = 256>
 class counting_semaphore {
@@ -34,10 +43,9 @@ public:
         // specialization
         return _LeastMaxValue;
     }
-    constexpr explicit counting_semaphore(ptrdiff_t _Desired) {
+    constexpr explicit counting_semaphore(ptrdiff_t _Desired) : _Counter(_Desired) {
         _STL_ASSERT(_Desired >= 0 && _Desired <= max(),
             "Desired value for the semaphore falls outside of the maximum semaphore range");
-        atomic_init(&_Counter, _Desired);
     }
     ~counting_semaphore()                         = default;
     counting_semaphore(const counting_semaphore&) = delete;
@@ -49,20 +57,36 @@ public:
         // (According to Billy O'Neal). Granted, if you accidentally have more releases() than acquires that's your own
         // fault, but we can't actually punish you for it because of this.
         _STL_ASSERT(_Update >= 0, "You cannot release a negative value for semaphores");
+        __std_semaphore_init_values();
         _Counter.fetch_add(_Update);
-        WakeByAddressSingle(&_Counter._Storage._Value);
+        __std_semaphore_wake_by_address(&_Counter._Storage._Value);
     }
     void acquire() {
-        ptrdiff_t _Undesired = 0;
         while (!try_acquire()) {
-            if (!WaitOnAddress(&_Counter._Storage._Value, &_Undesired, sizeof(_Counter._Storage._Value), INFINITE)) {
-                // This, just like in try_acquire_for, needs to be moved to a .cpp file, except we can call a noreturn
-                // function here to optimize it better
-                throw system_error(GetLastError(), system_category());
+            ptrdiff_t _Undesired = 0;
+            if constexpr (sizeof(ptrdiff_t) == sizeof(unsigned long long)) {
+                switch (__std_semaphore_wait_on_ullong_timed(&_Counter._Storage._Value, &_Undesired, _Infinite_Wait)) {
+                case 0:
+                    break;
+                default:
+                    // implement exceptions here, we can add cases for other stuff as well
+                    break;
+                }
+                // This, just like in try_acquire_for, needs to be moved to a .cpp file, except we can call a
+                // noreturn function here to optimize it better
+            } else if (sizeof(ptrdiff_t) == sizeof(unsigned long)) {
+                switch (__std_semaphore_wait_on_ulong_timed(&_Counter._Storage._Value, &_Undesired, _Infinite_Wait)) {
+                case 0:
+                    break;
+                default:
+                    // implement exceptions here
+                    break;
+                }
             }
         }
     }
     bool try_acquire() noexcept {
+        __std_semaphore_init_values();
         // This doesn't require a loop since if this fails even once we're allowed to yeet ourselves out of the function
         // by the standard
         ptrdiff_t _Old     = _Counter.load();
@@ -74,19 +98,30 @@ public:
     }
     template <class _Rep, class _Period>
     bool try_acquire_for(const chrono::duration<_Rep, _Period>& _Rel_time) {
-        ptrdiff_t _Undesired = 0;
         while (!try_acquire()) {
-            if (!WaitOnAddress(&_Counter._Storage._Value, &_Undesired, sizeof(_Counter._Storage._Value),
-                    chrono::duration_cast<milli>(_Rel_time))) {
-                // This is just a demonstration of what is needed in terms of functionality, the entire GetLastError and
-                // system_error stuff needs to be moved into a separately compiled .cpp file to avoid pulling in the
-                // synchronization library and windows.h for no reason, as well as to provide support for everything
-                // between XP and Windows 10.
-                DWORD _LastErr = GetLastError();
-                if (_LastErr == ERROR_TIMEOUT) {
+            ptrdiff_t _Undesired = 0;
+            if constexpr (sizeof(ptrdiff_t) == sizeof(long long)) {
+                switch (__std_semaphore_wait_on_ullong_timed(
+                    &_Counter._Storage._Value, &_Undesired, chrono::duration_cast<milli>(_Rel_time))) {
+                case 0:
+                    break;
+                case 1:
                     return false;
+                default:
+                    // implement errors
+                    break;
                 }
-                throw system_error(_LastErr, system_category());
+            } else if (sizeof(ptrdiff_t) == sizeof(long)) {
+                switch (__std_semaphore_wait_on_ulong_timed(
+                    &_Counter._Storage._Value, &_Undesired, chrono::duration_cast<milli>(_Rel_time))) {
+                case 0:
+                    break;
+                case 1:
+                    return false;
+                default:
+                    // implement errors
+                    break;
+                }
             }
         }
         return true;
@@ -98,6 +133,7 @@ public:
 
 private:
     atomic<ptrdiff_t> _Counter;
+    constexpr unsigned long _Infinite_Wait = 0xFFFFFFFF;
 };
 using binary_semaphore = counting_semaphore<1>;
 _STD_END
